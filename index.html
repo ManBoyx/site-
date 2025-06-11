@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Survie .io</title>
+    <!-- Chargement de Tailwind CSS via CDN pour la mise en page générale -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #2c3e50; /* Bleu foncé pour le fond du jeu */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            overflow: hidden; /* Empêche les barres de défilement */
+            color: white;
+        }
+
+        canvas {
+            background-color: #34495e; /* Bleu-gris plus clair pour le terrain de jeu */
+            display: block;
+            border-radius: 12px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+            /* Le JS gérera la taille responsive du canvas */
+        }
+
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+
+        .game-info {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            max-width: 800px; /* Aligné avec la largeur max du canvas */
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #ecf0f1;
+        }
+
+        .game-over-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            color: white;
+            font-size: 2rem;
+            border-radius: 12px; /* Pour correspondre au canvas */
+            backdrop-filter: blur(5px); /* Effet de flou sur le fond */
+        }
+
+        .button-style {
+            background: linear-gradient(145deg, #3498db, #2980b9);
+            border: none;
+            color: white;
+            padding: 12px 28px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 1.2rem;
+            margin-top: 20px;
+            cursor: pointer;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+            transition: all 0.3s ease;
+            font-weight: bold;
+        }
+
+        .button-style:hover {
+            background: linear-gradient(145deg, #2980b9, #3498db);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        .button-style:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        .pulsing-text {
+            animation: pulse 1.5s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+    <div class="game-container">
+        <div class="game-info">
+            <span>Score: <span id="scoreDisplay">0</span></span>
+            <span>Taille: <span id="sizeDisplay">10</span></span>
+        </div>
+        <div style="position: relative;">
+            <canvas id="gameCanvas"></canvas>
+            <div id="gameOverScreen" class="game-over-overlay hidden rounded-lg">
+                <h2 class="text-5xl font-extrabold mb-4 pulsing-text">Game Over !</h2>
+                <p class="text-2xl mb-6">Votre score final est : <span id="finalScoreDisplay" class="font-bold">0</span></p>
+                <button id="restartButton" class="button-style">Rejouer</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Récupération des éléments HTML
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const sizeDisplay = document.getElementById('sizeDisplay');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const finalScoreDisplay = document.getElementById('finalScoreDisplay');
+        const restartButton = document.getElementById('restartButton');
+
+        // Variables du jeu
+        let player = {};
+        let foods = [];
+        let enemies = [];
+        let score = 0;
+        let gameOver = false;
+        let mouseX = 0;
+        let mouseY = 0;
+
+        // Configurations du jeu
+        const GAME_WIDTH = 800;
+        const GAME_HEIGHT = 600;
+        const INITIAL_PLAYER_RADIUS = 10;
+        const FOOD_RADIUS = 5;
+        const ENEMY_MIN_RADIUS = 20;
+        const ENEMY_MAX_RADIUS = 40;
+        const MAX_FOODS = 50;
+        const MAX_ENEMIES = 10;
+        const FOOD_SPAWN_INTERVAL = 200; // ms
+        const ENEMY_SPAWN_INTERVAL = 1000; // ms
+        const ENEMY_SPEED_MULTIPLIER = 0.005; // Ajuste la vitesse des ennemis (plus petit = plus lent)
+
+        let lastFoodSpawnTime = 0;
+        let lastEnemySpawnTime = 0;
+
+        // --- Fonctions utilitaires ---
+
+        /**
+         * Calcule la distance entre deux points.
+         * @param {number} x1 - Coordonnée X du premier point.
+         * @param {number} y1 - Coordonnée Y du premier point.
+         * @param {number} x2 - Coordonnée X du second point.
+         * @param {number} y2 - Coordonnée Y du second point.
+         * @returns {number} La distance.
+         */
+        function distance(x1, y1, x2, y2) {
+            return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+        }
+
+        /**
+         * Génère un nombre aléatoire dans une plage donnée.
+         * @param {number} min - La valeur minimale (incluse).
+         * @param {number} max - La valeur maximale (incluse).
+         * @returns {number} Le nombre aléatoire.
+         */
+        function random(min, max) {
+            return Math.random() * (max - min) + min;
+        }
+
+        /**
+         * Initialise l'état du jeu.
+         */
+        function initGame() {
+            canvas.width = GAME_WIDTH;
+            canvas.height = GAME_HEIGHT;
+
+            player = {
+                x: canvas.width / 2,
+                y: canvas.height / 2,
+                radius: INITIAL_PLAYER_RADIUS,
+                color: '#2ecc71', // Vert émeraude
+                speed: 5 // Vitesse de déplacement du joueur
+            };
+
+            foods = [];
+            enemies = [];
+            score = 0;
+            gameOver = false;
+
+            scoreDisplay.textContent = score;
+            sizeDisplay.textContent = player.radius.toFixed(0);
+            gameOverScreen.classList.add('hidden'); // Cache l'écran de fin de jeu
+
+            // S'assure que le canvas est visible après un redimensionnement si le jeu était terminé
+            canvas.style.display = 'block';
+            
+            lastFoodSpawnTime = performance.now();
+            lastEnemySpawnTime = performance.now();
+
+            animate(); // Lance la boucle de jeu
+        }
+
+        /**
+         * Dessine le joueur sur le canvas.
+         */
+        function drawPlayer() {
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+            ctx.fillStyle = player.color;
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        /**
+         * Dessine toutes les particules de nourriture.
+         */
+        function drawFoods() {
+            foods.forEach(food => {
+                ctx.beginPath();
+                ctx.arc(food.x, food.y, food.radius, 0, Math.PI * 2);
+                ctx.fillStyle = food.color;
+                ctx.fill();
+                ctx.closePath();
+            });
+        }
+
+        /**
+         * Dessine tous les ennemis.
+         */
+        function drawEnemies() {
+            enemies.forEach(enemy => {
+                ctx.beginPath();
+                ctx.arc(enemy.x, enemy.y, enemy.radius, 0, Math.PI * 2);
+                ctx.fillStyle = enemy.color;
+                ctx.fill();
+                ctx.closePath();
+            });
+        }
+
+        /**
+         * Crée une nouvelle particule de nourriture.
+         */
+        function spawnFood() {
+            if (foods.length < MAX_FOODS) {
+                foods.push({
+                    x: random(FOOD_RADIUS, canvas.width - FOOD_RADIUS),
+                    y: random(FOOD_RADIUS, canvas.height - FOOD_RADIUS),
+                    radius: FOOD_RADIUS,
+                    color: '#f1c40f' // Jaune soleil
+                });
+            }
+        }
+
+        /**
+         * Crée un nouvel ennemi.
+         */
+        function spawnEnemy() {
+            if (enemies.length < MAX_ENEMIES) {
+                const radius = random(ENEMY_MIN_RADIUS, ENEMY_MAX_RADIUS);
+                // Placer l'ennemi en dehors de l'écran pour qu'il "apparaisse"
+                let x, y;
+                const edge = Math.floor(random(0, 4)); // 0: top, 1: right, 2: bottom, 3: left
+
+                switch (edge) {
+                    case 0: // Top
+                        x = random(0, canvas.width);
+                        y = -radius;
+                        break;
+                    case 1: // Right
+                        x = canvas.width + radius;
+                        y = random(0, canvas.height);
+                        break;
+                    case 2: // Bottom
+                        x = random(0, canvas.width);
+                        y = canvas.height + radius;
+                        break;
+                    case 3: // Left
+                        x = -radius;
+                        y = random(0, canvas.height);
+                        break;
+                }
+
+                enemies.push({
+                    x: x,
+                    y: y,
+                    radius: radius,
+                    color: '#e74c3c', // Rouge corail
+                    // L'ennemi se dirige vers le joueur
+                    // Sa vitesse dépendra de sa taille (plus grand = plus lent)
+                    speed: (50 / radius) * ENEMY_SPEED_MULTIPLIER
+                });
+            }
+        }
+
+        /**
+         * Met à jour l'état du jeu.
+         * @param {number} deltaTime - Le temps écoulé depuis la dernière mise à jour.
+         */
+        function updateGame(deltaTime) {
+            if (gameOver) return;
+
+            // Déplacement du joueur (vers la souris)
+            const dx = mouseX - player.x;
+            const dy = mouseY - player.y;
+            const angle = Math.atan2(dy, dx);
+
+            player.x += Math.cos(angle) * player.speed;
+            player.y += Math.sin(angle) * player.speed;
+
+            // Limiter le joueur aux bords du canvas
+            player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x));
+            player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y));
+
+            // Mettre à jour les ennemis et gérer les collisions
+            enemies.forEach((enemy, enemyIndex) => {
+                // Mouvement des ennemis (vers le joueur)
+                const edx = player.x - enemy.x;
+                const edy = player.y - enemy.y;
+                const eangle = Math.atan2(edy, edx);
+
+                enemy.x += Math.cos(eangle) * enemy.speed * deltaTime;
+                enemy.y += Math.sin(eangle) * enemy.speed * deltaTime;
+
+                // Collision joueur-ennemi
+                const distPlayerEnemy = distance(player.x, player.y, enemy.x, enemy.y);
+                if (distPlayerEnemy < player.radius + enemy.radius) {
+                    if (player.radius < enemy.radius) {
+                        // Game Over si l'ennemi est plus grand
+                        gameOver = true;
+                        finalScoreDisplay.textContent = score;
+                        gameOverScreen.classList.remove('hidden');
+                        canvas.style.display = 'none'; // Cache le canvas pour montrer l'overlay
+                    } else {
+                        // Si le joueur est plus grand, il "mange" l'ennemi
+                        player.radius += enemy.radius * 0.1; // Gagne de la taille
+                        score += Math.floor(enemy.radius); // Gagne des points basés sur la taille de l'ennemi
+                        enemies.splice(enemyIndex, 1); // Supprime l'ennemi
+                        sizeDisplay.textContent = player.radius.toFixed(0);
+                        scoreDisplay.textContent = score;
+                    }
+                }
+            });
+
+            // Collision joueur-nourriture
+            foods.forEach((food, foodIndex) => {
+                const distPlayerFood = distance(player.x, player.y, food.x, food.y);
+                if (distPlayerFood < player.radius + food.radius) {
+                    // Manger la nourriture
+                    player.radius += 0.5; // Gagne de la taille
+                    score += 1; // Gagne 1 point
+                    foods.splice(foodIndex, 1); // Supprime la nourriture
+                    scoreDisplay.textContent = score;
+                    sizeDisplay.textContent = player.radius.toFixed(0);
+                }
+            });
+
+            // Génération de nourriture
+            const currentTime = performance.now();
+            if (currentTime - lastFoodSpawnTime > FOOD_SPAWN_INTERVAL) {
+                spawnFood();
+                lastFoodSpawnTime = currentTime;
+            }
+
+            // Génération d'ennemis
+            if (currentTime - lastEnemySpawnTime > ENEMY_SPAWN_INTERVAL) {
+                spawnEnemy();
+                lastEnemySpawnTime = currentTime;
+            }
+        }
+
+        // --- Boucle de jeu principale ---
+        let lastTime = 0;
+
+        /**
+         * La boucle d'animation principale du jeu.
+         * @param {number} currentTime - Le temps actuel passé par requestAnimationFrame.
+         */
+        function animate(currentTime = 0) {
+            if (gameOver) return;
+
+            const deltaTime = (currentTime - lastTime) / 1000; // Convertir en secondes
+            lastTime = currentTime;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // Efface le canvas
+
+            updateGame(deltaTime); // Met à jour la logique du jeu
+            drawFoods(); // Dessine la nourriture
+            drawEnemies(); // Dessine les ennemis
+            drawPlayer(); // Dessine le joueur (doit être dessiné en dernier pour être au-dessus)
+
+            requestAnimationFrame(animate); // Appelle la prochaine frame
+        }
+
+        // --- Gestion des événements ---
+
+        // Suivi de la souris pour le déplacement du joueur
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+        });
+        
+        // Redimensionnement du canvas pour la réactivité
+        function resizeCanvas() {
+            // Optionnel: Vous pouvez ajuster GAME_WIDTH/GAME_HEIGHT ici si vous voulez que le jeu s'adapte
+            // complètement à la fenêtre, mais pour un look .io, une taille fixe est souvent préférable.
+            // Cependant, on s'assure que le canvas ne dépasse pas la taille de la fenêtre
+            const maxAllowedWidth = window.innerWidth * 0.9;
+            const maxAllowedHeight = window.innerHeight * 0.8;
+
+            const newWidth = Math.min(GAME_WIDTH, maxAllowedWidth);
+            const newHeight = Math.min(GAME_HEIGHT, maxAllowedHeight);
+
+            canvas.style.width = `${newWidth}px`;
+            canvas.style.height = `${newHeight}px`;
+
+            // Mettre à jour les attributs de largeur/hauteur du canvas pour éviter le flou de mise à l'échelle
+            // Cela réinitialise le contexte, donc réinitialisez le jeu
+            initGame();
+        }
+
+        // Bouton de redémarrage
+        restartButton.addEventListener('click', initGame);
+
+        // Initialisation du jeu au chargement de la page et lors du redimensionnement
+        window.addEventListener('load', initGame);
+        window.addEventListener('resize', resizeCanvas); // Appelle resizeCanvas sur le redimensionnement
+
+    </script>
+</body>
+</html>
